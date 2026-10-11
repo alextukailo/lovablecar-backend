@@ -1,0 +1,45 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Car {
+  id           String          @id @default(cuid())
+  make         String
+  model        String
+  year         Int
+  engine       String?
+  vin          String?
+  licensePlate String?
+  mileage      Int             @default(0)
+  isPrimary    Boolean         @default(false)
+
+  serviceRecords ServiceRecord[]
+
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+model ServiceRecord {
+  id            String   @id @default(cuid())
+  carId         String
+  car           Car      @relation(fields: [carId], references: [id], onDelete: Cascade)
+
+  date          DateTime
+  mileage       Int
+  title         String
+  description   String?
+  cost          Decimal? @db.Decimal(10, 2)
+  currency      String   @default("PLN")
+  workshop      String?
+
+  legacyLocalId String?  @unique
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([carId, date])
+}
