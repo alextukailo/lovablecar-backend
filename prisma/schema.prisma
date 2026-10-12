@@ -66,6 +66,65 @@ enum MaintenanceNotificationType {
   OVERDUE
 }
 
+model User {
+  id String @id @default(cuid())
+
+  // Set only after the backend has verified
+  // the Telegram authentication response.
+  telegramUserId String @unique
+
+  firstName String?
+  lastName  String?
+  username  String?
+  photoUrl  String?
+
+  cars               Car[]
+  sessions           UserSession[]
+  telegramConnection TelegramConnection?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserSession {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Store a hash of the session token,
+  // never the raw bearer token.
+  tokenHash String @unique
+
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model TelegramConnection {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Telegram private chat identifier, stored as
+  // a string to avoid JavaScript integer issues.
+  chatId String @unique
+
+  // A bot conversation is linked only after
+  // a verified account-linking flow.
+  connectedAt DateTime @default(now())
+
+  notificationsEnabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Car {
   id           String  @id @default(cuid())
   make         String
@@ -82,11 +141,18 @@ model Car {
   drivetrainType   DrivetrainType?
   timingSystemType TimingSystemType?
 
+  // Nullable during migration so existing cars
+  // remain intact until ownership is assigned.
+  ownerId String?
+  owner   User?   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
   serviceRecords       ServiceRecord[]
   maintenanceSchedules MaintenanceSchedule[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
 }
 
 model ServiceRecord {
@@ -167,7 +233,7 @@ model MaintenanceCompletion {
   @@unique([maintenanceScheduleId, serviceRecordId])
   @@index([serviceRecordId])
 }
- 
+
 model MaintenanceNotification {
   id String @id @default(cuid())
 
