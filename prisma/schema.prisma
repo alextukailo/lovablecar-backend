@@ -1,3 +1,4 @@
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,40 +7,182 @@ datasource db {
   provider = "postgresql"
 }
 
+enum EngineType {
+  PETROL
+  DIESEL
+  HYBRID
+  ELECTRIC
+  OTHER
+  UNKNOWN
+}
+
+enum TransmissionType {
+  MANUAL
+  AUTOMATIC
+  CVT
+  DCT
+  OTHER
+  UNKNOWN
+}
+
+enum DrivetrainType {
+  FWD
+  RWD
+  AWD
+  FOUR_WD
+  UNKNOWN
+}
+
+enum TimingSystemType {
+  BELT
+  CHAIN
+  OTHER
+  UNKNOWN
+}
+
+enum MaintenanceType {
+  ENGINE_OIL
+  ENGINE_AIR_FILTER
+  CABIN_FILTER
+  FUEL_FILTER
+  SPARK_PLUGS
+  TRANSMISSION_OIL
+  TIMING_BELT
+  TIMING_CHAIN_INSPECTION
+  BRAKE_FLUID
+  COOLANT
+  HALDEX_OIL
+  HALDEX_FILTER
+  FRONT_DIFFERENTIAL_OIL
+  REAR_DIFFERENTIAL_OIL
+  TRANSFER_CASE_OIL
+  AUXILIARY_BELT
+  CUSTOM
+}
+
+enum MaintenanceNotificationType {
+  UPCOMING
+  DUE
+  OVERDUE
+}
+
 model Car {
-  id           String          @id @default(cuid())
+  id           String  @id @default(cuid())
   make         String
   model        String
   year         Int
   engine       String?
   vin          String?
   licensePlate String?
-  mileage      Int             @default(0)
-  isPrimary    Boolean         @default(false)
+  mileage      Int     @default(0)
+  isPrimary    Boolean @default(false)
 
-  serviceRecords ServiceRecord[]
+  engineType       EngineType?
+  transmissionType TransmissionType?
+  drivetrainType   DrivetrainType?
+  timingSystemType TimingSystemType?
 
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  serviceRecords       ServiceRecord[]
+  maintenanceSchedules MaintenanceSchedule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model ServiceRecord {
-  id            String   @id @default(cuid())
-  carId         String
-  car           Car      @relation(fields: [carId], references: [id], onDelete: Cascade)
+  id    String @id @default(cuid())
+  carId String
+  car   Car    @relation(fields: [carId], references: [id], onDelete: Cascade)
 
-  date          DateTime
-  mileage       Int
-  title         String
-  description   String?
-  cost          Decimal? @db.Decimal(10, 2)
-  currency      String   @default("PLN")
-  workshop      String?
+  date        DateTime
+  mileage     Int
+  title       String
+  description String?
+  cost        Decimal? @db.Decimal(10, 2)
+  currency    String   @default("PLN")
+  workshop    String?
 
-  legacyLocalId String?  @unique
+  legacyLocalId String? @unique
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  completedMaintenance MaintenanceCompletion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([carId, date])
+}
+
+model MaintenanceSchedule {
+  id    String @id @default(cuid())
+  carId String
+  car   Car    @relation(fields: [carId], references: [id], onDelete: Cascade)
+
+  type        MaintenanceType
+  customTitle String?
+  enabled     Boolean         @default(true)
+
+  intervalKm     Int?
+  intervalMonths Int?
+
+  lastServiceMileage Int?
+  lastServiceDate    DateTime?
+
+  nextDueMileage Int?
+  nextDueDate    DateTime?
+
+  warningKm   Int @default(1000)
+  warningDays Int @default(30)
+
+  notes String?
+
+  completions   MaintenanceCompletion[]
+  notifications MaintenanceNotification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([carId, enabled])
+  @@index([nextDueDate])
+  @@index([nextDueMileage])
+}
+
+model MaintenanceCompletion {
+  id String @id @default(cuid())
+
+  maintenanceScheduleId String
+  serviceRecordId       String
+
+  maintenanceSchedule MaintenanceSchedule @relation(fields: [maintenanceScheduleId], references: [id], onDelete: Cascade)
+  serviceRecord       ServiceRecord       @relation(fields: [serviceRecordId], references: [id], onDelete: Cascade)
+
+  // Identifies a single completion request.
+  // Retrying the same request must not create
+  // another service record.
+  //
+  // Optional for compatibility with existing rows.
+  idempotencyKey String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@unique([maintenanceScheduleId, serviceRecordId])
+  @@index([serviceRecordId])
+}
+ 
+model MaintenanceNotification {
+  id String @id @default(cuid())
+
+  maintenanceScheduleId String
+  maintenanceSchedule   MaintenanceSchedule @relation(fields: [maintenanceScheduleId], references: [id], onDelete: Cascade)
+
+  type     MaintenanceNotificationType
+  cycleKey String
+
+  telegramChatId String?
+  sentAt         DateTime?
+  error          String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([maintenanceScheduleId, cycleKey, type])
+  @@index([sentAt])
 }
