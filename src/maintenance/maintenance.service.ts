@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import {
   BadRequestException,
   ConflictException,
@@ -5,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MaintenanceType } from '@prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service';
 
 type ScheduleInput = {
@@ -46,9 +50,15 @@ const MAX_DATABASE_INTEGER = 2_147_483_647;
 export class MaintenanceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async ensureCarExists(carId: string) {
-    const car = await this.prisma.car.findUnique({
-      where: { id: carId },
+  private async ensureCarOwnedByUser(
+    userId: string,
+    carId: string,
+  ): Promise<void> {
+    const car = await this.prisma.car.findFirst({
+      where: {
+        id: carId,
+        ownerId: userId,
+      },
       select: { id: true },
     });
 
@@ -57,9 +67,15 @@ export class MaintenanceService {
     }
   }
 
-  private async findScheduleOrThrow(carId: string, id: string) {
+  private async findScheduleOrThrow(userId: string, carId: string, id: string) {
     const schedule = await this.prisma.maintenanceSchedule.findFirst({
-      where: { id, carId },
+      where: {
+        id,
+        carId,
+        car: {
+          ownerId: userId,
+        },
+      },
     });
 
     if (!schedule) {
@@ -312,15 +328,20 @@ export class MaintenanceService {
     };
   }
 
-  async create(carId: string, input: ScheduleInput) {
-    await this.ensureCarExists(carId);
+  async create(userId: string, carId: string, input: ScheduleInput) {
+    await this.ensureCarOwnedByUser(userId, carId);
 
     const data = this.validateInput(input);
 
     if (data.type === MaintenanceType.CUSTOM) {
       return this.prisma.maintenanceSchedule.create({
         data: {
-          carId,
+          car: {
+            connect: {
+              id: carId,
+              ownerId: userId,
+            },
+          },
           ...data,
         },
       });
@@ -330,6 +351,9 @@ export class MaintenanceService {
       where: {
         carId,
         type: data.type,
+        car: {
+          ownerId: userId,
+        },
       },
       orderBy: {
         createdAt: 'asc',
@@ -339,54 +363,105 @@ export class MaintenanceService {
     if (existing) {
       const updatedData = this.validateInput(input, existing);
 
-      return this.prisma.maintenanceSchedule.update({
+      const result = await this.prisma.maintenanceSchedule.updateMany({
         where: {
           id: existing.id,
+          carId,
+          car: {
+            ownerId: userId,
+          },
         },
         data: updatedData,
       });
+
+      if (result.count !== 1) {
+        throw new NotFoundException(
+          `Maintenance schedule with ID ${existing.id} not found`,
+        );
+      }
+
+      return this.findScheduleOrThrow(userId, carId, existing.id);
     }
 
     return this.prisma.maintenanceSchedule.create({
       data: {
-        carId,
+        car: {
+          connect: {
+            id: carId,
+            ownerId: userId,
+          },
+        },
         ...data,
       },
     });
   }
 
-  async findAll(carId: string) {
-    await this.ensureCarExists(carId);
+  async findAll(userId: string, carId: string) {
+    await this.ensureCarOwnedByUser(userId, carId);
 
     return this.prisma.maintenanceSchedule.findMany({
-      where: { carId },
+      where: {
+        carId,
+        car: {
+          ownerId: userId,
+        },
+      },
       orderBy: {
         createdAt: 'asc',
       },
     });
   }
 
-  async findOne(carId: string, id: string) {
-    return this.findScheduleOrThrow(carId, id);
+  async findOne(userId: string, carId: string, id: string) {
+    return this.findScheduleOrThrow(userId, carId, id);
   }
 
-  async update(carId: string, id: string, input: ScheduleInput) {
-    const current = await this.findScheduleOrThrow(carId, id);
+  async update(
+    userId: string,
+    carId: string,
+    id: string,
+    input: ScheduleInput,
+  ) {
+    const current = await this.findScheduleOrThrow(userId, carId, id);
 
     const data = this.validateInput(input, current);
 
-    return this.prisma.maintenanceSchedule.update({
-      where: { id },
+    const result = await this.prisma.maintenanceSchedule.updateMany({
+      where: {
+        id,
+        carId,
+        car: {
+          ownerId: userId,
+        },
+      },
       data,
     });
+
+    if (result.count !== 1) {
+      throw new NotFoundException(
+        `Maintenance schedule with ID ${id} not found for car ${carId}`,
+      );
+    }
+
+    return this.findScheduleOrThrow(userId, carId, id);
   }
 
-  async remove(carId: string, id: string) {
-    await this.findScheduleOrThrow(carId, id);
-
-    await this.prisma.maintenanceSchedule.delete({
-      where: { id },
+  async remove(userId: string, carId: string, id: string) {
+    const result = await this.prisma.maintenanceSchedule.deleteMany({
+      where: {
+        id,
+        carId,
+        car: {
+          ownerId: userId,
+        },
+      },
     });
+
+    if (result.count !== 1) {
+      throw new NotFoundException(
+        `Maintenance schedule with ID ${id} not found for car ${carId}`,
+      );
+    }
 
     return {
       message: 'Maintenance schedule deleted successfully',
@@ -395,16 +470,23 @@ export class MaintenanceService {
   }
 
   /**
-   * Fetch an existing completion by its
-   * idempotency key.
-   *
-   * The linked service record is the source
-   * of truth for the original request details.
+   * Retrieve a completion by its idempotency key.
+   * Ownership is checked through the linked schedule.
    */
-  private async findExistingCompletion(key: string) {
-    return this.prisma.maintenanceCompletion.findUnique({
+  private async findExistingCompletion(
+    userId: string,
+    carId: string,
+    key: string,
+  ) {
+    return this.prisma.maintenanceCompletion.findFirst({
       where: {
         idempotencyKey: key,
+        maintenanceSchedule: {
+          carId,
+          car: {
+            ownerId: userId,
+          },
+        },
       },
       include: {
         serviceRecord: true,
@@ -414,10 +496,12 @@ export class MaintenanceService {
   }
 
   /**
-   * Return the original completion only when
-   * the key belongs to the same request.
+   * Replay only the original authorized request.
+   *
+   * A key used by another user is not exposed.
    */
   private async replayCompletion(
+    userId: string,
     key: string,
     carId: string,
     scheduleId: string,
@@ -425,7 +509,7 @@ export class MaintenanceService {
     completedAt: Date,
     notes: string | null,
   ) {
-    const existing = await this.findExistingCompletion(key);
+    const existing = await this.findExistingCompletion(userId, carId, key);
 
     if (!existing) {
       return null;
@@ -453,11 +537,6 @@ export class MaintenanceService {
     };
   }
 
-  /**
-   * Detect Prisma unique-constraint errors
-   * without depending on a specific Prisma
-   * exception class import.
-   */
   private isUniqueConstraintError(error: unknown): boolean {
     return (
       typeof error === 'object' &&
@@ -468,20 +547,23 @@ export class MaintenanceService {
   }
 
   /**
-   * Complete a maintenance task.
+   * Complete maintenance in one transaction.
    *
-   * A unique idempotency key identifies one
-   * logical completion request.
+   * Ownership is checked before replay and again
+   * inside the transaction before creating records.
    *
-   * The database transaction guarantees that
-   * the service record, completion link, and
-   * schedule update succeed or fail together.
-   *
-   * The unique database constraint prevents
-   * concurrent requests with the same key
-   * from creating duplicate service records.
+   * The unique idempotency key prevents duplicate
+   * completions for concurrent identical requests.
    */
-  async complete(carId: string, id: string, input: CompleteMaintenanceInput) {
+  async complete(
+    userId: string,
+    carId: string,
+    id: string,
+    input: CompleteMaintenanceInput,
+  ) {
+    // Authorization must happen before replay lookup.
+    await this.findScheduleOrThrow(userId, carId, id);
+
     if (input === null || typeof input !== 'object' || Array.isArray(input)) {
       throw new BadRequestException('Completion details must be an object');
     }
@@ -522,10 +604,8 @@ export class MaintenanceService {
 
     const key = input.idempotencyKey;
 
-    // Check before calculating a new schedule
-    // deadline. A retry must return its original
-    // completion even if schedule settings changed.
     const replay = await this.replayCompletion(
+      userId,
       key,
       carId,
       id,
@@ -538,7 +618,7 @@ export class MaintenanceService {
       return replay;
     }
 
-    const current = await this.findScheduleOrThrow(carId, id);
+    const current = await this.findScheduleOrThrow(userId, carId, id);
 
     const nextDue = this.calculateNextDue({
       intervalKm: current.intervalKm,
@@ -554,9 +634,34 @@ export class MaintenanceService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        // Recheck ownership within the transaction.
+        const authorizedSchedule = await tx.maintenanceSchedule.findFirst({
+          where: {
+            id,
+            carId,
+            car: {
+              ownerId: userId,
+            },
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        if (!authorizedSchedule) {
+          throw new NotFoundException(
+            `Maintenance schedule with ID ${id} not found for car ${carId}`,
+          );
+        }
+
         const serviceRecord = await tx.serviceRecord.create({
           data: {
-            carId,
+            car: {
+              connect: {
+                id: carId,
+                ownerId: userId,
+              },
+            },
             date: completedAt,
             mileage,
             title,
@@ -572,12 +677,34 @@ export class MaintenanceService {
           },
         });
 
-        const schedule = await tx.maintenanceSchedule.update({
-          where: { id },
+        const updated = await tx.maintenanceSchedule.updateMany({
+          where: {
+            id,
+            carId,
+            car: {
+              ownerId: userId,
+            },
+          },
           data: {
             lastServiceMileage: mileage,
             lastServiceDate: completedAt,
             ...nextDue,
+          },
+        });
+
+        if (updated.count !== 1) {
+          throw new NotFoundException(
+            `Maintenance schedule with ID ${id} not found for car ${carId}`,
+          );
+        }
+
+        const schedule = await tx.maintenanceSchedule.findFirstOrThrow({
+          where: {
+            id,
+            carId,
+            car: {
+              ownerId: userId,
+            },
           },
         });
 
@@ -589,10 +716,8 @@ export class MaintenanceService {
       });
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
-        // The competing transaction may have
-        // committed while this one was running.
-        // Its completion can now be replayed.
         const existing = await this.replayCompletion(
+          userId,
           key,
           carId,
           id,
@@ -606,7 +731,7 @@ export class MaintenanceService {
         }
 
         throw new ConflictException(
-          'A concurrent completion request was detected. Please retry with the same idempotency key.',
+          'A concurrent completion request or an already-used idempotency key was detected. Please use the original key only when retrying the same request.',
         );
       }
 
