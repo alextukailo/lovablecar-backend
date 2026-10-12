@@ -5,7 +5,7 @@ import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './prisma/prisma.module';
 import { CarsModule } from './cars/cars.module';
 import { ServicesModule } from './services/services.module';
-import { MaintenanceModule } from './maintenance/dto/maintenance.module';
+import { MaintenanceModule } from './maintenance/maintenance.module';
 
 @Module({
   imports: [
