@@ -6,41 +6,61 @@ import {
   Param,
   Patch,
   Post,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
+
+import { SessionAuthGuard } from '../auth/session-auth.guard';
+import type { AuthenticatedRequest } from '../auth/session-auth.guard';
+
 import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
 
 @Controller('cars/:carId/services')
+@UseGuards(SessionAuthGuard)
 export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
 
   @Post()
-  create(@Param('carId') carId: string, @Body() dto: CreateServiceDto) {
-    return this.servicesService.create(carId, dto);
+  create(
+    @Req() request: AuthenticatedRequest,
+    @Param('carId') carId: string,
+    @Body() dto: CreateServiceDto,
+  ) {
+    return this.servicesService.create(request.user.id, carId, dto);
   }
 
   @Get()
-  findAll(@Param('carId') carId: string) {
-    return this.servicesService.findAll(carId);
+  findAll(@Req() request: AuthenticatedRequest, @Param('carId') carId: string) {
+    return this.servicesService.findAll(request.user.id, carId);
   }
 
   @Get(':id')
-  findOne(@Param('carId') carId: string, @Param('id') id: string) {
-    return this.servicesService.findOne(carId, id);
+  findOne(
+    @Req() request: AuthenticatedRequest,
+    @Param('carId') carId: string,
+    @Param('id') id: string,
+  ) {
+    return this.servicesService.findOne(request.user.id, carId, id);
   }
 
   @Patch(':id')
   update(
+    @Req() request: AuthenticatedRequest,
     @Param('carId') carId: string,
     @Param('id') id: string,
     @Body() dto: UpdateServiceDto,
   ) {
-    return this.servicesService.update(carId, id, dto);
+    return this.servicesService.update(request.user.id, carId, id, dto);
   }
 
   @Delete(':id')
-  remove(@Param('carId') carId: string, @Param('id') id: string) {
-    return this.servicesService.remove(carId, id);
+  remove(
+    @Req() request: AuthenticatedRequest,
+    @Param('carId') carId: string,
+    @Param('id') id: string,
+  ) {
+    return this.servicesService.remove(request.user.id, carId, id);
   }
 }
