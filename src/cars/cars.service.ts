@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCarDto } from './dto/create-car.dto';
 import { UpdateCarDto } from './dto/update-car.dto';
@@ -7,13 +8,14 @@ import { UpdateCarDto } from './dto/update-car.dto';
 export class CarsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(createCarDto: CreateCarDto) {
+  async create(userId: string, createCarDto: CreateCarDto) {
     const { isPrimary, ...data } = createCarDto;
 
     return this.prisma.$transaction(async (tx) => {
       if (isPrimary === true) {
         await tx.car.updateMany({
           where: {
+            ownerId: userId,
             isPrimary: true,
           },
           data: {
@@ -25,23 +27,30 @@ export class CarsService {
       return tx.car.create({
         data: {
           ...data,
+          ownerId: userId,
           isPrimary: isPrimary ?? false,
         },
       });
     });
   }
 
-  async findAll() {
+  async findAll(userId: string) {
     return this.prisma.car.findMany({
+      where: {
+        ownerId: userId,
+      },
       orderBy: {
         createdAt: 'desc',
       },
     });
   }
 
-  async findOne(id: string) {
-    const car = await this.prisma.car.findUnique({
-      where: { id },
+  async findOne(userId: string, id: string) {
+    const car = await this.prisma.car.findFirst({
+      where: {
+        id,
+        ownerId: userId,
+      },
       include: {
         serviceRecords: {
           orderBy: {
@@ -58,12 +67,15 @@ export class CarsService {
     return car;
   }
 
-  async update(id: string, updateCarDto: UpdateCarDto) {
+  async update(userId: string, id: string, updateCarDto: UpdateCarDto) {
     const { isPrimary, ...data } = updateCarDto;
 
     return this.prisma.$transaction(async (tx) => {
-      const existingCar = await tx.car.findUnique({
-        where: { id },
+      const existingCar = await tx.car.findFirst({
+        where: {
+          id,
+          ownerId: userId,
+        },
       });
 
       if (!existingCar) {
@@ -73,6 +85,7 @@ export class CarsService {
       if (isPrimary === true) {
         await tx.car.updateMany({
           where: {
+            ownerId: userId,
             isPrimary: true,
             id: {
               not: id,
@@ -84,28 +97,41 @@ export class CarsService {
         });
       }
 
-      return tx.car.update({
-        where: { id },
+      const result = await tx.car.updateMany({
+        where: {
+          id,
+          ownerId: userId,
+        },
         data: {
           ...data,
           ...(isPrimary !== undefined ? { isPrimary } : {}),
         },
       });
+
+      if (result.count !== 1) {
+        throw new NotFoundException(`Car with ID ${id} not found`);
+      }
+
+      return tx.car.findFirstOrThrow({
+        where: {
+          id,
+          ownerId: userId,
+        },
+      });
     });
   }
 
-  async remove(id: string) {
-    const car = await this.prisma.car.findUnique({
-      where: { id },
+  async remove(userId: string, id: string) {
+    const result = await this.prisma.car.deleteMany({
+      where: {
+        id,
+        ownerId: userId,
+      },
     });
 
-    if (!car) {
+    if (result.count !== 1) {
       throw new NotFoundException(`Car with ID ${id} not found`);
     }
-
-    await this.prisma.car.delete({
-      where: { id },
-    });
 
     return {
       message: 'Car deleted successfully',
