@@ -264,6 +264,8 @@ model MobileLoginTransaction {
   challengeHash    String
   browserStateHash String? @unique
 
+  telegramOidcAttempts TelegramOidcAttempt[]
+
   status MobileLoginStatus @default(PENDING)
 
   userId String?
@@ -283,6 +285,40 @@ model MobileLoginTransaction {
 
   @@index([expiresAt])
   @@index([status, expiresAt])
+}
+
+model TelegramOidcAttempt {
+  id String @id @default(cuid())
+
+  validatedAttemptNumber Int?
+
+  // Browser-state proof, stored temporarily for the OIDC callback.
+  browserStateEncrypted String?
+
+  // Confirmation-code proof, stored temporarily for the OIDC callback.
+  confirmationCodeEncrypted String?
+
+  // Links this OIDC authorization to an existing
+  // LovableCar mobile login transaction.
+  transactionId String
+  transaction   MobileLoginTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  // Store only a SHA-256 hash of the OAuth state.
+  stateHash String @unique
+
+  // PKCE verifier is needed for the token exchange.
+  codeVerifier String
+
+  // Used to verify the ID token belongs to this attempt.
+  nonce String
+
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([transactionId])
+  @@index([expiresAt])
 }
 
 model TelegramLoginReplay {

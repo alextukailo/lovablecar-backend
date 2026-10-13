@@ -15,11 +15,10 @@ export class MobileLoginPageController {
     'Content-Security-Policy',
     [
       "default-src 'none'",
-      "script-src 'unsafe-inline' 'unsafe-eval' https://telegram.org",
-      'frame-src https://oauth.telegram.org https://*.telegram.org',
+      "script-src 'unsafe-inline'",
       "connect-src 'self'",
       "style-src 'unsafe-inline'",
-      "img-src 'self' https://telegram.org https://*.telegram.org data:",
+      "img-src 'self' data:",
       "base-uri 'none'",
       "form-action 'self'",
       "frame-ancestors 'none'",
@@ -193,14 +192,9 @@ export class MobileLoginPageController {
     </label>
 
     <div id="telegram-widget">
-    <script
-        async
-        src="https://telegram.org/js/telegram-widget.js?22"
-        data-telegram-login="lovablecar_bot"
-        data-size="large"
-        data-userpic="false"
-        data-onauth="onLovableCarTelegramAuth(user)"
-    ></script>
+      <button type="button" id="telegram-login-button">
+        Log in with Telegram
+      </button>
     </div>
 
     <p id="status" role="status" aria-live="polite"></p>
@@ -222,86 +216,83 @@ export class MobileLoginPageController {
     const status =
       document.getElementById('status');
 
-    let submitting = false;
-    let completed = false;
+    
+let submitting = false;
 
-    function showStatus(message, type) {
-      status.textContent = message;
-      status.className = type || '';
+function showStatus(message, type) {
+  status.textContent = message;
+  status.className = type || '';
+}
+
+const loginButton =
+  document.getElementById('telegram-login-button');
+
+loginButton.addEventListener('click', async () => {
+  if (submitting) return;
+
+  const confirmationCode = confirmationInput.value.trim();
+
+  if (!/^[0-9]{6}$/.test(confirmationCode)) {
+    showStatus(
+      'Enter the six-digit code from your LovableCar app.',
+      'error',
+    );
+    confirmationInput.focus();
+    return;
+  }
+
+  if (!approval.checked) {
+    showStatus(
+      'Confirm that you started this login on your own device.',
+      'error',
+    );
+    return;
+  }
+
+  submitting = true;
+  loginButton.disabled = true;
+  showStatus('Connecting to Telegram...');
+
+  try {
+    const response = await fetch('/auth/telegram/start', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        transactionId,
+        browserState,
+        confirmationCode,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Could not start Telegram login');
     }
 
-    async function onTelegramAuth(user) {
-      if (submitting || completed) {
-        return;
-      }
+    const result = await response.json();
 
-      const confirmationCode =
-        confirmationInput.value.trim();
-
-      if (!/^[0-9]{6}$/.test(confirmationCode)) {
-        showStatus(
-          'Enter the six-digit code from your LovableCar app.',
-          'error'
-        );
-        confirmationInput.focus();
-        return;
-      }
-
-      if (!approval.checked) {
-        showStatus(
-          'Confirm that you started this login on your own device.',
-          'error'
-        );
-        return;
-      }
-
-      submitting = true;
-      showStatus('Verifying Telegram login...');
-
-      try {
-        const response = await fetch(
-          '/auth/mobile/approve',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            credentials: 'same-origin',
-            body: JSON.stringify({
-              transactionId,
-              browserState,
-              confirmationCode,
-              telegram: user
-            })
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error('Login approval failed');
-        }
-
-        completed = true;
-
-        showStatus(
-          'Login approved. Return to LovableCar to continue.',
-          'success'
-        );
-
-        approval.disabled = true;
-        confirmationInput.disabled = true;
-        confirmationInput.value = '';
-        widgetContainer.replaceChildren();
-      } catch {
-        showStatus(
-          'Could not approve login. Check the code or start again.',
-          'error'
-        );
-      } finally {
-        submitting = false;
-      }
+    if (
+      typeof result.authorizationUrl !== 'string' ||
+      !result.authorizationUrl.startsWith(
+        'https://oauth.telegram.org/',
+      )
+    ) {
+      throw new Error('Invalid Telegram authorization URL');
     }
 
-    window.onLovableCarTelegramAuth = onTelegramAuth;
+    window.location.assign(result.authorizationUrl);
+  } catch {
+    showStatus(
+      'Could not start Telegram login. Check the code or try again.',
+      'error',
+    );
+    submitting = false;
+    loginButton.disabled = false;
+  }
+});
+
   </script>
 </body>
 </html>`;

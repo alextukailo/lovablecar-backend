@@ -116,7 +116,7 @@ export class MobileLoginService {
   }
 
   /**
-   * Create a short-lived login transaction.
+   * Create a short-lived mobile login transaction.
    */
   async create(challengeHash: string) {
     if (
@@ -170,48 +170,38 @@ export class MobileLoginService {
   }
 
   /**
-   * Reject unavailable transactions before
-   * verifying the Telegram payload.
+   * Validate a confirmation code and atomically
+   * count the attempt.
    *
-   * Final authorization is repeated during
-   * approval.
+   * Returns the attempt number so the OIDC flow
+   * can bind its callback to this exact attempt.
    */
   async assertApprovalAvailable(
     transactionId: string,
     browserState: string,
     confirmationCode: string,
-  ): Promise<void> {
+  ): Promise<number> {
     this.validateApprovalInput(transactionId, browserState, confirmationCode);
 
-    const transaction = await this.prisma.mobileLoginTransaction.findFirst({
-      where: {
-        id: transactionId,
-        browserStateHash: this.sha256(browserState),
-        status: 'PENDING',
-        expiresAt: {
-          gt: new Date(),
-        },
-        confirmationAttempts: {
-          lt: MAX_CONFIRMATION_ATTEMPTS,
-        },
-      },
-      select: {
-        confirmationCodeHash: true,
-      },
-    });
+    const reserved = await this.reserveAttempt(
+      transactionId,
+      this.sha256(browserState),
+    );
 
-    if (!transaction?.confirmationCodeHash) {
-      throw new UnauthorizedException(
-        'Login approval is invalid, expired, or locked',
-      );
+    const expected = this.hashConfirmationCode(transactionId, confirmationCode);
+
+    if (!this.hashesMatch(reserved.confirmationCodeHash, expected)) {
+      throw new UnauthorizedException('Invalid confirmation code');
     }
+
+    return reserved.confirmationAttempts;
   }
 
   /**
-   * Atomically reserve one confirmation attempt.
+   * Atomically count one confirmation attempt.
    *
-   * Failed attempts remain committed, including
-   * attempts with an incorrect confirmation code.
+   * Incorrect attempts remain counted because
+   * this SQL operation commits independently.
    */
   private async reserveAttempt(
     transactionId: string,
@@ -248,11 +238,10 @@ export class MobileLoginService {
   }
 
   /**
-   * Approve a transaction using a Telegram identity
-   * already verified by TelegramAuthService.
+   * Legacy Telegram signed-login approval.
    *
-   * The signature replay record, user upsert, and
-   * transaction approval commit atomically.
+   * This method counts its own confirmation
+   * attempt and protects against signature replay.
    */
   async approve(
     transactionId: string,
@@ -289,12 +278,6 @@ export class MobileLoginService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        /*
-         * Reserve the signed Telegram response.
-         *
-         * The unique payloadHash constraint
-         * rejects reuse across transactions.
-         */
         await tx.telegramLoginReplay.create({
           data: {
             payloadHash,
@@ -303,13 +286,6 @@ export class MobileLoginService {
           },
         });
 
-        /*
-         * Create or update the user only after
-         * replay reservation succeeds.
-         *
-         * A subsequent approval failure rolls
-         * this upsert back automatically.
-         */
         const user = await tx.user.upsert({
           where: {
             telegramUserId: verified.telegramUserId,
@@ -332,11 +308,6 @@ export class MobileLoginService {
           },
         });
 
-        /*
-         * A concurrent confirmation attempt
-         * invalidates this approval if it has
-         * changed the reserved attempt number.
-         */
         const approved = await tx.mobileLoginTransaction.updateMany({
           where: {
             id: transactionId,
@@ -377,8 +348,97 @@ export class MobileLoginService {
   }
 
   /**
-   * Exchange the device-only challenge for one
-   * backend session.
+   * Approve a Telegram OIDC login.
+   *
+   * The confirmation code was validated and
+   * counted before redirecting to Telegram.
+   *
+   * The callback must present the same attempt
+   * number recorded at authorization start.
+   */
+  async approveOidc(
+    transactionId: string,
+    browserState: string,
+    verified: VerifiedTelegramUser,
+    confirmationCode: string,
+    validatedAttemptNumber: number,
+  ): Promise<void> {
+    this.validateApprovalInput(transactionId, browserState, confirmationCode);
+
+    this.validateVerifiedIdentity(verified);
+
+    if (
+      !Number.isInteger(validatedAttemptNumber) ||
+      validatedAttemptNumber < 1 ||
+      validatedAttemptNumber > MAX_CONFIRMATION_ATTEMPTS
+    ) {
+      throw new UnauthorizedException('Invalid validated confirmation attempt');
+    }
+
+    const browserStateHash = this.sha256(browserState);
+
+    const expectedCodeHash = this.hashConfirmationCode(
+      transactionId,
+      confirmationCode,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.upsert({
+        where: {
+          telegramUserId: verified.telegramUserId,
+        },
+        create: {
+          telegramUserId: verified.telegramUserId,
+          firstName: verified.firstName,
+          lastName: verified.lastName,
+          username: verified.username,
+          photoUrl: verified.photoUrl,
+        },
+        update: {
+          firstName: verified.firstName,
+          lastName: verified.lastName,
+          username: verified.username,
+          photoUrl: verified.photoUrl,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      const approved = await tx.mobileLoginTransaction.updateMany({
+        where: {
+          id: transactionId,
+          browserStateHash,
+          status: 'PENDING',
+          confirmationCodeHash: expectedCodeHash,
+
+          // Reject callbacks if another confirmation
+          // attempt occurred after OIDC started.
+          confirmationAttempts: validatedAttemptNumber,
+
+          expiresAt: {
+            gt: new Date(),
+          },
+        },
+        data: {
+          status: 'APPROVED',
+          userId: user.id,
+          browserStateHash: null,
+          confirmationCodeHash: null,
+        },
+      });
+
+      if (approved.count !== 1) {
+        throw new UnauthorizedException(
+          'Login already approved, expired, or changed',
+        );
+      }
+    });
+  }
+
+  /**
+   * Exchange the device-held challenge for
+   * a session token exactly once.
    */
   async exchange(transactionId: string, challenge: string) {
     if (

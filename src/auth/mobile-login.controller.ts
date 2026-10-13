@@ -138,15 +138,13 @@ export class MobileLoginController {
   }
 
   /**
-   * Approve a mobile login transaction.
+   * Approve a mobile login using the legacy
+   * Telegram signed-login payload.
    *
-   * 1. Check transaction availability.
-   * 2. Verify Telegram's signed payload.
-   * 3. Reserve a confirmation-code attempt.
-   * 4. Atomically reserve the Telegram signature,
-   *    upsert the user, and approve the transaction.
+   * The service counts confirmation attempts
+   * and enforces replay protection.
    *
-   * The browser never receives a session token.
+   * No session token is returned to the browser.
    */
   @Post('approve')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -157,23 +155,18 @@ export class MobileLoginController {
     },
   })
   async approve(@Body() body: ApproveMobileLoginDto): Promise<void> {
-    await this.mobileLoginService.assertApprovalAvailable(
-      body.transactionId,
-      body.browserState,
-      body.confirmationCode,
-    );
-
     /*
-     * Telegram signature verification is read-only.
-     * Invalid signatures cannot create or modify users.
+     * Verify Telegram's signed payload.
+     * Invalid signatures cannot create users.
      */
     const verified = this.telegramAuthService.verifyTelegramPayload(
       body.telegram,
     );
 
     /*
-     * The service handles confirmation attempts,
-     * replay protection, user upsert, and approval.
+     * Do not call assertApprovalAvailable()
+     * here: approve() already reserves and
+     * counts the confirmation attempt.
      */
     await this.mobileLoginService.approve(
       body.transactionId,
@@ -185,10 +178,11 @@ export class MobileLoginController {
   }
 
   /**
-   * Exchange the device-held challenge for a session.
+   * Exchange the device-held challenge for
+   * a backend session.
    *
    * The challenge is never placed in a URL.
-   * The service enforces one-time exchange.
+   * The exchange succeeds only once.
    */
   @Post('exchange')
   @Throttle({
