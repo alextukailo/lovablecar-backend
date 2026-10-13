@@ -1,10 +1,7 @@
-/* eslint-disable @typescript-eslint/require-await */
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import {
-  Body,
   Controller,
   Get,
   Headers,
@@ -14,10 +11,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 
-import {
-  TelegramAuthService,
-  type TelegramLoginPayload,
-} from './telegram-auth.service';
+import { TelegramAuthService } from './telegram-auth.service';
 
 @Controller('auth')
 export class AuthController {
@@ -28,7 +22,7 @@ export class AuthController {
       throw new UnauthorizedException('Authorization header is required');
     }
 
-    const match = /^Bearer ([A-Za-z0-9_-]+)$/.exec(authorization);
+    const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization);
 
     if (!match) {
       throw new UnauthorizedException('Invalid Authorization header');
@@ -38,26 +32,33 @@ export class AuthController {
   }
 
   /**
-   * Accepts a signed Telegram Login Widget payload.
+   * Legacy direct Telegram login is disabled.
    *
-   * This is NOT Telegram Mini App initData or
-   * Telegram OIDC authorization-code data.
+   * A signed Telegram Login Widget response
+   * must not create a session directly.
    *
-   * Do not expose this route publicly until the
-   * browser login flow, validation, replay protection,
-   * and rate limiting are completed.
+   * Mobile clients must use the transaction-based
+   * browser login flow instead.
    */
   @Post('telegram')
-  @HttpCode(HttpStatus.OK)
-  async loginWithTelegram(@Body() payload: TelegramLoginPayload) {
-    return this.telegramAuthService.login(payload);
+  @HttpCode(HttpStatus.GONE)
+  legacyTelegramLogin(): {
+    message: string;
+  } {
+    return {
+      message: 'Direct Telegram login is disabled. Use the mobile login flow.',
+    };
   }
 
   /**
-   * Returns the user associated with a valid session.
+   * Return the user associated with an existing
+   * valid backend session.
    */
   @Get('me')
-  async getCurrentUser(@Headers('authorization') authorization?: string) {
+  async getCurrentUser(
+    @Headers('authorization')
+    authorization?: string,
+  ) {
     const token = this.getBearerToken(authorization);
 
     const user = await this.telegramAuthService.verifySession(token);
@@ -73,16 +74,18 @@ export class AuthController {
   }
 
   /**
-   * Revokes the current session.
+   * Revoke the current backend session.
    */
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(
-    @Headers('authorization') authorization?: string,
+    @Headers('authorization')
+    authorization?: string,
   ): Promise<void> {
     const token = this.getBearerToken(authorization);
 
     await this.telegramAuthService.verifySession(token);
+
     await this.telegramAuthService.logout(token);
   }
 }

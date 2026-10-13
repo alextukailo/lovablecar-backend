@@ -1,6 +1,7 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/require-await */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import {
   Injectable,
@@ -27,7 +28,7 @@ export interface TelegramLoginPayload {
   hash: string;
 }
 
-interface VerifiedTelegramUser {
+export interface VerifiedTelegramUser {
   telegramUserId: string;
   firstName: string | null;
   lastName: string | null;
@@ -65,9 +66,16 @@ export class TelegramAuthService {
     return token;
   }
 
-  private verifyTelegramPayload(
-    payload: TelegramLoginPayload,
-  ): VerifiedTelegramUser {
+  /**
+   * Verify a legacy Telegram Login Widget payload.
+   *
+   * This method performs no database writes and
+   * creates no backend session.
+   *
+   * It does not verify Telegram Mini App initData
+   * or Telegram OIDC authorization-code responses.
+   */
+  verifyTelegramPayload(payload: TelegramLoginPayload): VerifiedTelegramUser {
     if (
       !payload ||
       typeof payload !== 'object' ||
@@ -167,10 +175,18 @@ export class TelegramAuthService {
     };
   }
 
-  async login(payload: TelegramLoginPayload): Promise<AuthenticatedSession> {
+  /**
+   * Verify Telegram identity and persist the user.
+   *
+   * Kept for compatibility with existing callers.
+   * The new mobile approval flow will instead use
+   * verifyTelegramPayload() and persist the user
+   * inside its own approval transaction.
+   */
+  async verifyTelegramIdentity(payload: TelegramLoginPayload) {
     const verified = this.verifyTelegramPayload(payload);
 
-    const user = await this.prisma.user.upsert({
+    return this.prisma.user.upsert({
       where: {
         telegramUserId: verified.telegramUserId,
       },
@@ -188,6 +204,16 @@ export class TelegramAuthService {
         photoUrl: verified.photoUrl,
       },
     });
+  }
+
+  /**
+   * Existing legacy login implementation.
+   *
+   * The HTTP POST /auth/telegram endpoint remains
+   * disabled by AuthController.
+   */
+  async login(payload: TelegramLoginPayload): Promise<AuthenticatedSession> {
+    const user = await this.verifyTelegramIdentity(payload);
 
     const token = randomBytes(32).toString('base64url');
 
@@ -219,6 +245,9 @@ export class TelegramAuthService {
     };
   }
 
+  /**
+   * Verify an existing backend session.
+   */
   async verifySession(token: string) {
     if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
       throw new UnauthorizedException('Invalid session token');
@@ -227,8 +256,12 @@ export class TelegramAuthService {
     const tokenHash = createHash('sha256').update(token).digest('hex');
 
     const session = await this.prisma.userSession.findUnique({
-      where: { tokenHash },
-      include: { user: true },
+      where: {
+        tokenHash,
+      },
+      include: {
+        user: true,
+      },
     });
 
     if (
@@ -242,6 +275,9 @@ export class TelegramAuthService {
     return session.user;
   }
 
+  /**
+   * Revoke an existing backend session.
+   */
   async logout(token: string): Promise<void> {
     if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
       throw new UnauthorizedException('Invalid session token');

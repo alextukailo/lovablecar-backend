@@ -1,0 +1,26 @@
+
+model MobileLoginTransaction {
+  id String @id @default(cuid())
+
+  // SHA-256 hash of the mobile-generated secret.
+  // The raw mobile secret remains on the device.
+  challengeHash String
+
+  // SHA-256 hash of a random browser state.
+  // The raw browser state is never stored here.
+  browserStateHash String? @unique
+
+  status MobileLoginStatus @default(PENDING)
+
+  // Set only after verified Telegram authentication.
+  userId String?
+
+  expiresAt DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
+  @@index([status, expiresAt])
+}

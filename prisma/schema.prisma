@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -251,4 +250,73 @@ model MaintenanceNotification {
 
   @@unique([maintenanceScheduleId, cycleKey, type])
   @@index([sentAt])
+}
+
+enum MobileLoginStatus {
+  PENDING
+  APPROVED
+  CONSUMED
+}
+
+model MobileLoginTransaction {
+  id String @id @default(cuid())
+
+  challengeHash    String
+  browserStateHash String? @unique
+
+  status MobileLoginStatus @default(PENDING)
+
+  userId String?
+
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // SHA-256 hash of the six-digit code
+  // shown only in the mobile app.
+  confirmationCodeHash String?
+
+  // Number of incorrect confirmation attempts.
+  confirmationAttempts Int @default(0)
+
+  @@index([expiresAt])
+  @@index([status, expiresAt])
+}
+
+model TelegramLoginReplay {
+  id String @id @default(cuid())
+
+  // SHA-256 digest of the canonical signed
+  // Telegram login response.
+  payloadHash String @unique
+
+  // The mobile login transaction for which
+  // this Telegram response was accepted.
+  transactionId String
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model RateLimitCounter {
+  id String @id @default(cuid())
+
+  // SHA-256 hash of the limiter name
+  // and tracked client identifier.
+  keyHash String @unique
+
+  // Current fixed-window request count.
+  count Int @default(0)
+
+  // End of the current rate-limit window.
+  expiresAt DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
 }
