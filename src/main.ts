@@ -1,57 +1,61 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { ExpressAdapter } from '@nestjs/platform-express';
+
 import { AppModule } from './app.module';
 
+import type { NestExpressApplication } from '@nestjs/platform-express';
+
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(
+    AppModule,
+    new ExpressAdapter(),
+  );
+
+  const allowedOrigins = [
+    'https://lovablecar-backend.vercel.app',
+
+    // local development
+    'http://localhost:3000',
+    'http://localhost:8081',
+    'http://localhost:19006',
+  ];
 
   app.enableCors({
     origin: (
       origin: string | undefined,
       callback: (error: Error | null, allow?: boolean) => void,
     ) => {
-      // Allow native mobile requests and local development.
+      /*
+       * Native mobile apps and server-to-server
+       * requests do not send Origin.
+       */
       if (!origin) {
-        callback(null, true);
-        return;
+        return callback(null, true);
       }
-
-      const allowedOrigins = [
-        'http://localhost:8081',
-        'http://127.0.0.1:8081',
-        'http://localhost:19006',
-        'http://127.0.0.1:19006',
-        ...(process.env.CORS_ORIGINS ?? '')
-          .split(',')
-          .map((value) => value.trim())
-          .filter(Boolean),
-      ];
 
       if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-        return;
+        return callback(null, true);
       }
 
-      callback(new Error(`CORS origin not allowed: ${origin}`), false);
+      return callback(new Error(`CORS origin not allowed: ${origin}`), false);
     },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+
     credentials: true,
+
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: true,
       transform: true,
     }),
   );
 
-  const port = Number(process.env.PORT ?? 3000);
-
-  await app.listen(port, '0.0.0.0');
-
-  console.log(`LovableCar API listening on port ${port}`);
+  await app.listen(process.env.PORT || 3000, '0.0.0.0');
 }
 
 bootstrap();
