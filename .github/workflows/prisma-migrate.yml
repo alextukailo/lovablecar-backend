@@ -1,0 +1,66 @@
+
+name: Production Prisma Migration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-prisma-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Apply production migrations
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify production database target
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          node - <<'NODE'
+          const value = process.env.DATABASE_URL;
+          if (!value) {
+            throw new Error('PRODUCTION_DATABASE_URL secret is missing');
+          }
+
+          const url = new URL(value);
+
+          if (!['postgresql:', 'postgres:'].includes(url.protocol)) {
+            throw new Error('DATABASE_URL is not a PostgreSQL URL');
+          }
+
+          const host = url.hostname.toLowerCase();
+
+          if (
+            host === 'localhost' ||
+            host === '127.0.0.1' ||
+            host === '::1' ||
+            host.endsWith('.localhost')
+          ) {
+            throw new Error('Refusing to migrate a local database');
+          }
+
+          console.log('Production database URL format verified');
+          NODE
+
+      - name: Apply Prisma migrations
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: npm run db:migrate:deploy

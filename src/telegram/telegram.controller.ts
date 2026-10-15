@@ -1,93 +1,71 @@
-/* eslint-disable @typescript-eslint/require-await */
 import {
+  Body,
   Controller,
   ForbiddenException,
   Headers,
   HttpCode,
   HttpStatus,
   Post,
-  Body,
   ServiceUnavailableException,
 } from '@nestjs/common';
+
 import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'node:crypto';
 
-interface TelegramWebhookUser {
-  id: number;
-  is_bot?: boolean;
-  first_name?: string;
-  username?: string;
-}
+import { TelegramLinkService } from './telegram-link.service';
+import { TelegramService } from './telegram.service';
 
-interface TelegramWebhookChat {
-  id: number;
-  type: string;
-}
-
-interface TelegramWebhookMessage {
-  message_id: number;
-  text?: string;
-  from?: TelegramWebhookUser;
-  chat: TelegramWebhookChat;
-}
-
-interface TelegramWebhookUpdate {
+interface TelegramUpdate {
   update_id: number;
-  message?: TelegramWebhookMessage;
+  message?: {
+    text?: string;
+    from?: {
+      id: number;
+      is_bot?: boolean;
+    };
+    chat?: {
+      id: number;
+      type: string;
+    };
+  };
 }
 
 @Controller('telegram')
 export class TelegramController {
-  constructor(private readonly config: ConfigService) {}
-
-  private verifyWebhookSecret(providedSecret: string | undefined): void {
-    const expectedSecret = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET');
-
-    if (!expectedSecret) {
-      throw new ServiceUnavailableException(
-        'Telegram webhook is not configured',
-      );
-    }
-
-    if (!providedSecret) {
-      throw new ForbiddenException('Invalid Telegram webhook secret');
-    }
-
-    const expected = Buffer.from(expectedSecret, 'utf8');
-    const provided = Buffer.from(providedSecret, 'utf8');
-
-    if (
-      expected.length !== provided.length ||
-      !timingSafeEqual(expected, provided)
-    ) {
-      throw new ForbiddenException('Invalid Telegram webhook secret');
-    }
-  }
+  constructor(
+    private readonly config: ConfigService,
+    private readonly links: TelegramLinkService,
+    private readonly telegram: TelegramService,
+  ) {}
 
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
-  async handleWebhook(
+  async webhook(
     @Headers('x-telegram-bot-api-secret-token')
-    webhookSecret: string | undefined,
-    @Body() update: TelegramWebhookUpdate,
+    secret: string | undefined,
+    @Body() update: TelegramUpdate,
   ): Promise<{ ok: true }> {
-    this.verifyWebhookSecret(webhookSecret);
+    const configured = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET');
 
-    if (
-      !update ||
-      typeof update.update_id !== 'number' ||
-      !Number.isSafeInteger(update.update_id)
-    ) {
+    if (!configured) {
+      throw new ServiceUnavailableException('Telegram webhook not configured');
+    }
+
+    const a = Buffer.from(configured);
+    const b = Buffer.from(secret ?? '');
+
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      throw new ForbiddenException('Invalid Telegram webhook secret');
+    }
+
+    if (!update || !Number.isSafeInteger(update.update_id)) {
       throw new ForbiddenException('Invalid Telegram update');
     }
 
     const message = update.message;
 
-    if (!message) {
-      return { ok: true };
-    }
-
     if (
+      !message ||
       message.chat?.type !== 'private' ||
       !message.from ||
       message.from.is_bot
@@ -95,15 +73,26 @@ export class TelegramController {
       return { ok: true };
     }
 
-    // Account linking will be implemented in a
-    // separate step using a short-lived, one-time
-    // code bound to an authenticated user.
-    //
-    // Never trust a user ID or chat ID sent by
-    // the Expo application.
-    //
-    // For now, acknowledge valid updates without
-    // modifying user accounts or sending messages.
+    const match = /^\/start link_([A-Za-z0-9_-]{32})$/.exec(
+      message.text?.trim() ?? '',
+    );
+
+    if (!match) {
+      return { ok: true };
+    }
+
+    const linked = await this.links.consumeStart(
+      match[1],
+      String(message.from.id),
+      String(message.chat.id),
+    );
+
+    await this.telegram.sendMessage({
+      chatId: String(message.chat.id),
+      text: linked
+        ? '✅ Telegram connected to LovableCar. Maintenance reminders are enabled.'
+        : '⚠️ Linking failed. Open LovableCar and generate a new link.',
+    });
 
     return { ok: true };
   }
