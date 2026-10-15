@@ -1,10 +1,11 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'node:crypto';
@@ -12,6 +13,8 @@ import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class TelegramLinkService {
+  private readonly logger = new Logger(TelegramLinkService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
@@ -45,6 +48,8 @@ export class TelegramLinkService {
       });
     });
 
+    this.logger.log('Telegram linking token created');
+
     return {
       url: `https://t.me/${botUsername}?start=link_${token}`,
       expiresAt,
@@ -57,6 +62,7 @@ export class TelegramLinkService {
     chatId: string,
   ): Promise<boolean> {
     if (!/^[A-Za-z0-9_-]{32}$/.test(token)) {
+      this.logger.warn('Telegram linking failed: invalid token format');
       return false;
     }
 
@@ -69,11 +75,22 @@ export class TelegramLinkService {
       },
     });
 
-    if (
-      !link ||
-      link.expiresAt <= new Date() ||
-      link.user.telegramUserId !== telegramUserId
-    ) {
+    if (!link) {
+      this.logger.warn('Telegram linking failed: token not found');
+      return false;
+    }
+
+    if (link.expiresAt <= new Date()) {
+      this.logger.warn('Telegram linking failed: token expired');
+      return false;
+    }
+
+    const expectedTelegramId = String(link.user.telegramUserId ?? '');
+
+    const actualTelegramId = String(telegramUserId);
+
+    if (!expectedTelegramId || expectedTelegramId !== actualTelegramId) {
+      this.logger.warn('Telegram linking failed: Telegram user ID mismatch');
       return false;
     }
 
@@ -108,11 +125,19 @@ export class TelegramLinkService {
         });
       });
 
+      this.logger.log('Telegram account linked successfully');
+
       return true;
     } catch (error) {
       if (error instanceof ConflictException) {
+        this.logger.warn('Telegram linking failed: token already consumed');
         return false;
       }
+
+      this.logger.error(
+        'Telegram linking failed during database transaction',
+        error instanceof Error ? error.stack : undefined,
+      );
 
       throw error;
     }
