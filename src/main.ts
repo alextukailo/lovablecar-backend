@@ -13,12 +13,10 @@ async function bootstrap() {
   );
 
   const allowedOrigins = [
-    'https://lovablecar-backend.vercel.app',
-
-    // local development
-    'http://localhost:3000',
     'http://localhost:8081',
     'http://localhost:19006',
+    'http://localhost:3000',
+    'https://lovablecar-backend.vercel.app',
   ];
 
   app.enableCors({

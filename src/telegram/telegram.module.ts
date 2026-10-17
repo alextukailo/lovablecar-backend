@@ -1,28 +1,20 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module';
-import { PrismaModule } from '../prisma/prisma.module';
+import { MileageModule } from '../mileage/mileage.module';
 
 import { TelegramController } from './telegram.controller';
-import { TelegramLinkController } from './telegram-link.controller';
-import { TelegramLinkService } from './telegram-link.service';
 import { TelegramService } from './telegram.service';
-
-import { MaintenanceNotificationWorker } from './maintenance-notification.worker';
-import { MaintenanceNotificationDevController } from './maintenance-notification-dev.controller';
+import { TelegramLinkService } from './telegram-link.service';
+import { TelegramLinkController } from './telegram-link.controller';
 
 @Module({
-  imports: [PrismaModule, AuthModule],
-  controllers: [
-    TelegramController,
-    TelegramLinkController,
-    MaintenanceNotificationDevController,
-  ],
-  providers: [
-    TelegramService,
-    TelegramLinkService,
-    MaintenanceNotificationWorker,
-  ],
-  exports: [TelegramService],
+  imports: [AuthModule, forwardRef(() => MileageModule)],
+
+  controllers: [TelegramController, TelegramLinkController],
+
+  providers: [TelegramService, TelegramLinkService],
+
+  exports: [TelegramService, TelegramLinkService],
 })
 export class TelegramModule {}

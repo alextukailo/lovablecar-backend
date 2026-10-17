@@ -374,6 +374,7 @@ model MileageReading {
 model MileageReminder {
   carId String @id
   car Car @relation(fields: [carId], references: [id], onDelete: Cascade)
+  telegramMessageId Int?
   nextDueAt DateTime @default(now())
   pendingSince DateTime?
   lastSentAt DateTime?

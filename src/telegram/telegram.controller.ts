@@ -5,60 +5,127 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Inject,
+  Logger,
   Post,
   ServiceUnavailableException,
+  forwardRef,
 } from '@nestjs/common';
 
 import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'node:crypto';
 
+import { MileageService } from '../mileage/mileage.service';
 import { TelegramLinkService } from './telegram-link.service';
 import { TelegramService } from './telegram.service';
 
-interface TelegramUpdate {
-  update_id: number;
-  message?: {
-    text?: string;
-    from?: {
-      id: number;
-      is_bot?: boolean;
-    };
-    chat?: {
-      id: number;
-      type: string;
-    };
+interface TelegramWebhookUser {
+  id: number;
+  is_bot?: boolean;
+  first_name?: string;
+  username?: string;
+}
+
+interface TelegramWebhookChat {
+  id: number;
+  type: string;
+}
+
+interface TelegramWebhookMessage {
+  message_id: number;
+  text?: string;
+  from?: TelegramWebhookUser;
+  chat: TelegramWebhookChat;
+  reply_to_message?: {
+    message_id: number;
+    from?: TelegramWebhookUser;
   };
+}
+
+interface TelegramWebhookUpdate {
+  update_id: number;
+  message?: TelegramWebhookMessage;
 }
 
 @Controller('telegram')
 export class TelegramController {
+  private readonly logger = new Logger(TelegramController.name);
+
   constructor(
     private readonly config: ConfigService,
-    private readonly links: TelegramLinkService,
-    private readonly telegram: TelegramService,
+    private readonly telegramLinkService: TelegramLinkService,
+    private readonly telegramService: TelegramService,
+
+    @Inject(forwardRef(() => MileageService))
+    private readonly mileageService: MileageService,
   ) {}
 
-  @Post('webhook')
-  @HttpCode(HttpStatus.OK)
-  async webhook(
-    @Headers('x-telegram-bot-api-secret-token')
-    secret: string | undefined,
-    @Body() update: TelegramUpdate,
-  ): Promise<{ ok: true }> {
-    const configured = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET');
+  private verifyWebhookSecret(providedSecret: string | undefined): void {
+    const expectedSecret = this.config.get<string>('TELEGRAM_WEBHOOK_SECRET');
 
-    if (!configured) {
-      throw new ServiceUnavailableException('Telegram webhook not configured');
+    if (!expectedSecret) {
+      throw new ServiceUnavailableException(
+        'Telegram webhook is not configured',
+      );
     }
 
-    const a = Buffer.from(configured);
-    const b = Buffer.from(secret ?? '');
-
-    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    if (!providedSecret) {
       throw new ForbiddenException('Invalid Telegram webhook secret');
     }
 
-    if (!update || !Number.isSafeInteger(update.update_id)) {
+    const expected = Buffer.from(expectedSecret, 'utf8');
+
+    const provided = Buffer.from(providedSecret, 'utf8');
+
+    if (
+      expected.length !== provided.length ||
+      !timingSafeEqual(expected, provided)
+    ) {
+      throw new ForbiddenException('Invalid Telegram webhook secret');
+    }
+  }
+
+  private async handleStart(message: TelegramWebhookMessage): Promise<void> {
+    const text = message.text?.trim() ?? '';
+
+    const match = /^\/start(?:@\w+)?\s+link_([A-Za-z0-9_-]{32})$/i.exec(text);
+
+    if (!match || !message.from) {
+      return;
+    }
+
+    const chatId = String(message.chat.id);
+
+    const connected = await this.telegramLinkService.consumeStart(
+      match[1],
+      String(message.from.id),
+      chatId,
+    );
+
+    await this.telegramService.sendMessage({
+      chatId,
+      text: connected
+        ? '✅ Telegram connected to LovableCar.\n\nMaintenance reminders and mileage checks are enabled.'
+        : '❌ Telegram linking failed.\n\nPlease generate a new linking URL in LovableCar.',
+    });
+  }
+
+  @Post('webhook')
+  @HttpCode(HttpStatus.OK)
+  async handleWebhook(
+    @Headers('x-telegram-bot-api-secret-token')
+    webhookSecret: string | undefined,
+
+    @Body()
+    update: TelegramWebhookUpdate,
+  ): Promise<{ ok: true }> {
+    this.verifyWebhookSecret(webhookSecret);
+
+    if (
+      !update ||
+      typeof update.update_id !== 'number' ||
+      !Number.isSafeInteger(update.update_id)
+    ) {
       throw new ForbiddenException('Invalid Telegram update');
     }
 
@@ -68,31 +135,51 @@ export class TelegramController {
       !message ||
       message.chat?.type !== 'private' ||
       !message.from ||
-      message.from.is_bot
+      message.from.is_bot ||
+      typeof message.text !== 'string'
     ) {
       return { ok: true };
     }
 
-    const match = /^\/start link_([A-Za-z0-9_-]{32})$/.exec(
-      message.text?.trim() ?? '',
-    );
+    const text = message.text.trim();
 
-    if (!match) {
+    const chatId = String(message.chat.id);
+    const telegramUserId = String(message.from.id);
+
+    // 1. Telegram account linking.
+    if (/^\/start(?:@\w+)?\s+link_/i.test(text)) {
+      await this.handleStart(message);
       return { ok: true };
     }
 
-    const linked = await this.links.consumeStart(
-      match[1],
-      String(message.from.id),
-      String(message.chat.id),
-    );
+    // 2. Existing manual mileage command.
+    if (/^\/mileage(?:@\w+)?(?:\s|$)/i.test(text)) {
+      await this.mileageService.handleMessage(chatId, telegramUserId, text);
 
-    await this.telegram.sendMessage({
-      chatId: String(message.chat.id),
-      text: linked
-        ? '✅ Telegram connected to LovableCar. Maintenance reminders are enabled.'
-        : '⚠️ Linking failed. Open LovableCar and generate a new link.',
-    });
+      return { ok: true };
+    }
+
+    // 3. Reply to a mileage reminder.
+    const repliedMessage = message.reply_to_message;
+
+    if (
+      repliedMessage &&
+      Number.isSafeInteger(repliedMessage.message_id) &&
+      repliedMessage.from?.is_bot === true
+    ) {
+      const handled = await this.mileageService.handleNumericReply(
+        chatId,
+        telegramUserId,
+        text,
+        repliedMessage.message_id,
+      );
+
+      if (handled) {
+        this.logger.log('Mileage reply processed');
+      }
+
+      return { ok: true };
+    }
 
     return { ok: true };
   }
