@@ -11,6 +11,7 @@ import { ServicesModule } from './services/services.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
 import { AuthModule } from './auth/auth.module';
 import { TelegramModule } from './telegram/telegram.module';
+import { MileageModule } from './mileage/mileage.module';
 
 import { PrismaThrottlerStorage } from './auth/prisma-throttler.storage';
 
@@ -42,6 +43,7 @@ import { PrismaThrottlerStorage } from './auth/prisma-throttler.storage';
     MaintenanceModule,
     AuthModule,
     TelegramModule,
+    MileageModule,
   ],
 
   providers: [

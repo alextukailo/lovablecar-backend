@@ -65,26 +65,12 @@ enum MaintenanceNotificationType {
   OVERDUE
 }
 
-model TelegramLinkToken {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  @@index([userId])
-  @@index([expiresAt])
-}
-
 model User {
   id String @id @default(cuid())
 
   // Set only after the backend has verified
   // the Telegram authentication response.
   telegramUserId String @unique
-
-  telegramLinkTokens TelegramLinkToken[]
 
   firstName String?
   lastName  String?
@@ -94,6 +80,7 @@ model User {
   cars               Car[]
   sessions           UserSession[]
   telegramConnection TelegramConnection?
+  telegramLinkTokens TelegramLinkToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -160,6 +147,8 @@ model Car {
   owner   User?   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
 
   serviceRecords       ServiceRecord[]
+  mileageReadings MileageReading[]
+  mileageReminder MileageReminder?
   maintenanceSchedules MaintenanceSchedule[]
 
   createdAt DateTime @default(now())
@@ -368,5 +357,41 @@ model RateLimitCounter {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([expiresAt])
+}
+
+// Mileage readings are append-only audit records.
+model MileageReading {
+  id String @id @default(cuid())
+  carId String
+  car Car @relation(fields: [carId], references: [id], onDelete: Cascade)
+  mileage Int
+  source String @default("TELEGRAM")
+  createdAt DateTime @default(now())
+  @@index([carId, createdAt])
+}
+
+model MileageReminder {
+  carId String @id
+  car Car @relation(fields: [carId], references: [id], onDelete: Cascade)
+  nextDueAt DateTime @default(now())
+  pendingSince DateTime?
+  lastSentAt DateTime?
+  lastSubmittedAt DateTime?
+  // Reservation lease avoids duplicate sends from overlapping cron executions.
+  leaseUntil DateTime?
+  @@index([nextDueAt])
+}
+
+// Tokens used to link an existing LovableCar user to Telegram.
+model TelegramLinkToken {
+  id String @id @default(cuid())
+  tokenHash String @unique
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
   @@index([expiresAt])
 }

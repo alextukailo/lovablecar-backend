@@ -1,16 +1,25 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
+
 import {
   BadRequestException,
   ConflictException,
   Injectable,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
+
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { createHash, randomBytes } from 'node:crypto';
+
 import { PrismaService } from '../prisma/prisma.service';
+
+type TelegramStatus = {
+  connected: boolean;
+  notificationsEnabled: boolean;
+};
 
 @Injectable()
 export class TelegramLinkService {
@@ -21,7 +30,10 @@ export class TelegramLinkService {
     private readonly config: ConfigService,
   ) {}
 
-  async createLink(userId: string): Promise<{ url: string; expiresAt: Date }> {
+  async createLink(userId: string): Promise<{
+    url: string;
+    expiresAt: Date;
+  }> {
     const botUsername =
       this.config.get<string>('TELEGRAM_BOT_USERNAME') ?? 'lovablecar_bot';
 
@@ -64,14 +76,11 @@ export class TelegramLinkService {
     telegramUserId: string,
     chatId: string,
   ): Promise<boolean> {
-    // Only accept tokens with the expected format.
     if (!/^[A-Za-z0-9_-]{32}$/.test(token)) {
       this.logger.warn('Telegram linking rejected: invalid token format');
       return false;
     }
 
-    // This service only links private Telegram chats.
-    // In a private chat, sender ID and chat ID must match.
     if (
       !/^[1-9]\d*$/.test(telegramUserId) ||
       !/^[1-9]\d*$/.test(chatId) ||
@@ -104,8 +113,6 @@ export class TelegramLinkService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        // Consume the token atomically.
-        // Only one request can delete this record.
         const consumed = await tx.telegramLinkToken.deleteMany({
           where: {
             id: link.id,
@@ -119,8 +126,6 @@ export class TelegramLinkService {
           throw new ConflictException('Link token already used or expired');
         }
 
-        // Do not let one LovableCar account take over
-        // a Telegram chat linked to another account.
         const existingChat = await tx.telegramConnection.findUnique({
           where: { chatId },
         });
@@ -131,8 +136,6 @@ export class TelegramLinkService {
           );
         }
 
-        // Create or update the connection belonging
-        // to the authenticated LovableCar user.
         await tx.telegramConnection.upsert({
           where: {
             userId: link.userId,
@@ -177,10 +180,7 @@ export class TelegramLinkService {
     }
   }
 
-  async status(userId: string): Promise<{
-    connected: boolean;
-    notificationsEnabled: boolean;
-  }> {
+  async status(userId: string): Promise<TelegramStatus> {
     const connection = await this.prisma.telegramConnection.findUnique({
       where: { userId },
     });
@@ -188,6 +188,64 @@ export class TelegramLinkService {
     return {
       connected: Boolean(connection),
       notificationsEnabled: connection?.notificationsEnabled ?? false,
+    };
+  }
+
+  async updateNotifications(
+    userId: string,
+    body: unknown,
+  ): Promise<TelegramStatus> {
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      Array.isArray(body) ||
+      !('enabled' in body) ||
+      typeof body.enabled !== 'boolean'
+    ) {
+      throw new BadRequestException('enabled must be a boolean');
+    }
+
+    const enabled = body.enabled;
+
+    const updated = await this.prisma.telegramConnection.updateMany({
+      where: { userId },
+      data: {
+        notificationsEnabled: enabled,
+      },
+    });
+
+    if (updated.count === 0) {
+      throw new NotFoundException('Telegram account is not connected');
+    }
+
+    this.logger.log(
+      `Telegram notifications ${enabled ? 'enabled' : 'disabled'}`,
+    );
+
+    return {
+      connected: true,
+      notificationsEnabled: enabled,
+    };
+  }
+
+  async disconnect(userId: string): Promise<TelegramStatus> {
+    await this.prisma.$transaction(async (tx) => {
+      // Invalidate pending Telegram linking URLs.
+      await tx.telegramLinkToken.deleteMany({
+        where: { userId },
+      });
+
+      // Disconnect only the authenticated user's chat.
+      await tx.telegramConnection.deleteMany({
+        where: { userId },
+      });
+    });
+
+    this.logger.log('Telegram account disconnected');
+
+    return {
+      connected: false,
+      notificationsEnabled: false,
     };
   }
 }
