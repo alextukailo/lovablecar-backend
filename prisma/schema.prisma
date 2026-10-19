@@ -147,9 +147,9 @@ model Car {
   owner   User?   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
 
   serviceRecords       ServiceRecord[]
-  mileageReadings MileageReading[]
-  mileageReminder MileageReminder?
   maintenanceSchedules MaintenanceSchedule[]
+  mileageReadings      MileageReading[]
+  mileageReminder      MileageReminder?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -173,6 +173,7 @@ model ServiceRecord {
   legacyLocalId String? @unique
 
   completedMaintenance MaintenanceCompletion[]
+  maintenanceSchedule  MaintenanceSchedule?    @relation("ServiceSchedule")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -202,6 +203,9 @@ model MaintenanceSchedule {
   warningDays Int @default(30)
 
   notes String?
+
+  sourceServiceRecordId String?        @unique
+  sourceServiceRecord   ServiceRecord? @relation("ServiceSchedule", fields: [sourceServiceRecordId], references: [id], onDelete: SetNull)
 
   completions   MaintenanceCompletion[]
   notifications MaintenanceNotification[]
@@ -360,39 +364,42 @@ model RateLimitCounter {
   @@index([expiresAt])
 }
 
-// Mileage readings are append-only audit records.
-model MileageReading {
-  id String @id @default(cuid())
-  carId String
-  car Car @relation(fields: [carId], references: [id], onDelete: Cascade)
-  mileage Int
-  source String @default("TELEGRAM")
-  createdAt DateTime @default(now())
-  @@index([carId, createdAt])
-}
-
-model MileageReminder {
-  carId String @id
-  car Car @relation(fields: [carId], references: [id], onDelete: Cascade)
-  telegramMessageId Int?
-  nextDueAt DateTime @default(now())
-  pendingSince DateTime?
-  lastSentAt DateTime?
-  lastSubmittedAt DateTime?
-  // Reservation lease avoids duplicate sends from overlapping cron executions.
-  leaseUntil DateTime?
-  @@index([nextDueAt])
-}
-
-// Tokens used to link an existing LovableCar user to Telegram.
 model TelegramLinkToken {
-  id String @id @default(cuid())
-  tokenHash String @unique
-  userId String
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model MileageReading {
+  id        String   @id @default(cuid())
+  carId     String
+  car       Car      @relation(fields: [carId], references: [id], onDelete: Cascade)
+  mileage   Int
+  source    String   @default("TELEGRAM")
+  createdAt DateTime @default(now())
+
+  @@index([carId, createdAt])
+}
+
+model MileageReminder {
+  carId String @id
+  car   Car    @relation(fields: [carId], references: [id], onDelete: Cascade)
+
+  nextDueAt       DateTime  @default(now())
+  pendingSince    DateTime?
+  lastSentAt      DateTime?
+  lastSubmittedAt DateTime?
+  leaseUntil      DateTime?
+
+  // Telegram message ID used to match
+  // mileage replies to reminder messages.
+  telegramMessageId Int?
+
+  @@index([nextDueAt])
 }
