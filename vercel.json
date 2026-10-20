@@ -1,8 +1,4 @@
+
 {
-  "crons": [
-    {
-      "path": "/cron/mileage",
-      "schedule": "0 9 * * *"
-    }
-  ]
+  "crons": []
 }

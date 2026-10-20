@@ -14,6 +14,7 @@ import { TelegramModule } from './telegram/telegram.module';
 import { MileageModule } from './mileage/mileage.module';
 
 import { PrismaThrottlerStorage } from './auth/prisma-throttler.storage';
+import { CustomNotificationsModule } from './custom-notifications/custom-notifications.module';
 
 @Module({
   imports: [
@@ -22,6 +23,8 @@ import { PrismaThrottlerStorage } from './auth/prisma-throttler.storage';
     }),
 
     PrismaModule,
+
+    CustomNotificationsModule,
 
     ThrottlerModule.forRootAsync({
       imports: [PrismaModule],

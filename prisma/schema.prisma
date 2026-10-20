@@ -72,6 +72,8 @@ model User {
   // the Telegram authentication response.
   telegramUserId String @unique
 
+  customNotifications CustomNotification[]
+
   firstName String?
   lastName  String?
   username  String?
@@ -403,3 +405,39 @@ model MileageReminder {
 
   @@index([nextDueAt])
 }
+
+
+enum CustomNotificationStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+model CustomNotification {
+  id String @id @default(cuid())
+
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  text String
+
+  scheduledAt DateTime
+  timeZone String @default("UTC")
+
+  status CustomNotificationStatus @default(PENDING)
+
+  sentAt DateTime?
+  telegramMessageId Int?
+
+  claimedAt DateTime?
+  attempts Int @default(0)
+  lastError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, scheduledAt])
+  @@index([status, scheduledAt])
+}
+
