@@ -42,6 +42,10 @@ export class ServiceMaintenanceScheduleDto {
   intervalMonths?: number;
 
   @IsOptional()
+  @IsDateString()
+  nextDueDate?: string | null;
+
+  @IsOptional()
   @IsInt()
   @Min(0)
   @Max(100_000)

@@ -5,7 +5,6 @@ import {
 } from '@nestjs/common';
 
 import { MaintenanceType, Prisma } from '@prisma/client';
-
 import { PrismaService } from '../prisma/prisma.service';
 
 import {
@@ -26,13 +25,8 @@ export class ServicesService {
     carId: string,
   ): Promise<void> {
     const car = await this.prisma.car.findFirst({
-      where: {
-        id: carId,
-        ownerId: userId,
-      },
-      select: {
-        id: true,
-      },
+      where: { id: carId, ownerId: userId },
+      select: { id: true },
     });
 
     if (!car) {
@@ -46,11 +40,9 @@ export class ServicesService {
 
   private addMonths(date: Date, months: number): Date {
     const result = new Date(date);
-
     const originalDay = result.getUTCDate();
 
     result.setUTCDate(1);
-
     result.setUTCMonth(result.getUTCMonth() + months);
 
     const lastDayOfMonth = new Date(
@@ -58,18 +50,19 @@ export class ServicesService {
     ).getUTCDate();
 
     result.setUTCDate(Math.min(originalDay, lastDayOfMonth));
-
     return result;
   }
 
   private validateSchedule(input: ServiceMaintenanceScheduleDto): void {
-    if (!input.enabled) {
-      return;
-    }
+    if (!input.enabled) return;
 
-    if (input.intervalKm == null && input.intervalMonths == null) {
+    if (
+      input.intervalKm == null &&
+      input.intervalMonths == null &&
+      !input.nextDueDate
+    ) {
       throw new BadRequestException(
-        'An enabled maintenance schedule requires intervalKm or intervalMonths',
+        'An enabled maintenance schedule requires mileage, months or a due date',
       );
     }
 
@@ -101,7 +94,6 @@ export class ServicesService {
     this.validateSchedule(input);
 
     const intervalKm = input.intervalKm ?? null;
-
     const intervalMonths = input.intervalMonths ?? null;
 
     const nextDueMileage =
@@ -113,8 +105,9 @@ export class ServicesService {
       );
     }
 
-    const nextDueDate =
-      intervalMonths !== null
+    const nextDueDate = input.nextDueDate
+      ? new Date(`${input.nextDueDate.slice(0, 10)}T12:00:00.000Z`)
+      : intervalMonths !== null
         ? this.addMonths(service.date, intervalMonths)
         : null;
 
@@ -125,18 +118,13 @@ export class ServicesService {
     return {
       type: MaintenanceType.CUSTOM,
       customTitle: service.title.trim(),
-
       enabled: input.enabled,
-
       intervalKm,
       intervalMonths,
-
       lastServiceMileage: service.mileage,
       lastServiceDate: service.date,
-
       nextDueMileage,
       nextDueDate,
-
       warningKm: input.warningKm ?? 500,
       warningDays: input.warningDays ?? 7,
     };
@@ -153,13 +141,7 @@ export class ServicesService {
         carId,
         type: MaintenanceType.CUSTOM,
         enabled: true,
-        ...(excludeId
-          ? {
-              id: {
-                not: excludeId,
-              },
-            }
-          : {}),
+        ...(excludeId ? { id: { not: excludeId } } : {}),
       },
       select: {
         id: true,
@@ -176,12 +158,7 @@ export class ServicesService {
         this.normalizeTitle(schedule.customTitle) === normalizedTitle,
     );
 
-    // Ambiguous matches must not be renewed
-    // automatically.
-    if (matches.length !== 1) {
-      return null;
-    }
-
+    if (matches.length !== 1) return null;
     return matches[0];
   }
 
@@ -205,15 +182,10 @@ export class ServicesService {
     if (!input.enabled) {
       if (existingLinkedSchedule) {
         await tx.maintenanceSchedule.update({
-          where: {
-            id: existingLinkedSchedule.id,
-          },
-          data: {
-            enabled: false,
-          },
+          where: { id: existingLinkedSchedule.id },
+          data: { enabled: false },
         });
       }
-
       return;
     }
 
@@ -221,12 +193,9 @@ export class ServicesService {
 
     if (existingLinkedSchedule) {
       await tx.maintenanceSchedule.update({
-        where: {
-          id: existingLinkedSchedule.id,
-        },
+        where: { id: existingLinkedSchedule.id },
         data,
       });
-
       return;
     }
 
@@ -238,35 +207,21 @@ export class ServicesService {
 
     if (matchingSchedule) {
       await tx.maintenanceSchedule.update({
-        where: {
-          id: matchingSchedule.id,
-        },
+        where: { id: matchingSchedule.id },
         data: {
           ...data,
-
-          // The latest completed service becomes
-          // the schedule's source record.
           sourceServiceRecordId: service.id,
         },
       });
-
       return;
     }
 
     await tx.maintenanceSchedule.create({
       data: {
-        car: {
-          connect: {
-            id: carId,
-          },
-        },
-
+        car: { connect: { id: carId } },
         ...data,
-
         sourceServiceRecord: {
-          connect: {
-            id: service.id,
-          },
+          connect: { id: service.id },
         },
       },
     });
@@ -278,23 +233,15 @@ export class ServicesService {
     return this.prisma.$transaction(async (tx) => {
       const service = await tx.serviceRecord.create({
         data: {
-          car: {
-            connect: {
-              id: carId,
-            },
-          },
-
+          car: { connect: { id: carId } },
           date: new Date(dto.date),
           mileage: dto.mileage,
           title: dto.title,
           description: dto.description,
           workshop: dto.workshop,
           currency: dto.currency ?? 'BYN',
-
           ...(dto.cost !== undefined
-            ? {
-                cost: new Prisma.Decimal(dto.cost),
-              }
+            ? { cost: new Prisma.Decimal(dto.cost) }
             : {}),
         },
       });
@@ -309,12 +256,8 @@ export class ServicesService {
       }
 
       return tx.serviceRecord.findUniqueOrThrow({
-        where: {
-          id: service.id,
-        },
-        include: {
-          maintenanceSchedule: true,
-        },
+        where: { id: service.id },
+        include: { maintenanceSchedule: true },
       });
     });
   }
@@ -325,16 +268,10 @@ export class ServicesService {
     return this.prisma.serviceRecord.findMany({
       where: {
         carId,
-        car: {
-          ownerId: userId,
-        },
+        car: { ownerId: userId },
       },
-      include: {
-        maintenanceSchedule: true,
-      },
-      orderBy: {
-        date: 'desc',
-      },
+      include: { maintenanceSchedule: true },
+      orderBy: { date: 'desc' },
     });
   }
 
@@ -343,14 +280,9 @@ export class ServicesService {
       where: {
         id,
         carId,
-        car: {
-          ownerId: userId,
-        },
+        car: { ownerId: userId },
       },
-
-      include: {
-        maintenanceSchedule: true,
-      },
+      include: { maintenanceSchedule: true },
     });
 
     if (!service) {
@@ -375,9 +307,7 @@ export class ServicesService {
         where: {
           id,
           carId,
-          car: {
-            ownerId: userId,
-          },
+          car: { ownerId: userId },
         },
       });
 
@@ -388,53 +318,21 @@ export class ServicesService {
       }
 
       const data: Prisma.ServiceRecordUpdateInput = {
-        ...(dto.date !== undefined
-          ? {
-              date: new Date(dto.date),
-            }
-          : {}),
-
-        ...(dto.mileage !== undefined
-          ? {
-              mileage: dto.mileage,
-            }
-          : {}),
-
-        ...(dto.title !== undefined
-          ? {
-              title: dto.title,
-            }
-          : {}),
-
+        ...(dto.date !== undefined ? { date: new Date(dto.date) } : {}),
+        ...(dto.mileage !== undefined ? { mileage: dto.mileage } : {}),
+        ...(dto.title !== undefined ? { title: dto.title } : {}),
         ...(dto.description !== undefined
-          ? {
-              description: dto.description,
-            }
+          ? { description: dto.description }
           : {}),
-
-        ...(dto.workshop !== undefined
-          ? {
-              workshop: dto.workshop,
-            }
-          : {}),
-
+        ...(dto.workshop !== undefined ? { workshop: dto.workshop } : {}),
         ...(dto.cost !== undefined
-          ? {
-              cost: new Prisma.Decimal(dto.cost),
-            }
+          ? { cost: new Prisma.Decimal(dto.cost) }
           : {}),
-
-        ...(dto.currency !== undefined
-          ? {
-              currency: dto.currency,
-            }
-          : {}),
+        ...(dto.currency !== undefined ? { currency: dto.currency } : {}),
       };
 
       const service = await tx.serviceRecord.update({
-        where: {
-          id: existing.id,
-        },
+        where: { id: existing.id },
         data,
       });
 
@@ -446,9 +344,6 @@ export class ServicesService {
           dto.maintenanceSchedule,
         );
       } else {
-        // If the user edits the service date,
-        // mileage, or title, refresh the linked
-        // schedule's calculated due values.
         const linkedSchedule = await tx.maintenanceSchedule.findUnique({
           where: {
             sourceServiceRecordId: service.id,
@@ -478,19 +373,14 @@ export class ServicesService {
           const nextDueDate =
             linkedSchedule.intervalMonths !== null
               ? this.addMonths(service.date, linkedSchedule.intervalMonths)
-              : null;
+              : linkedSchedule.nextDueDate;
 
           await tx.maintenanceSchedule.update({
-            where: {
-              id: linkedSchedule.id,
-            },
+            where: { id: linkedSchedule.id },
             data: {
               customTitle: service.title.trim(),
-
               lastServiceMileage: service.mileage,
-
               lastServiceDate: service.date,
-
               nextDueMileage,
               nextDueDate,
             },
@@ -499,12 +389,8 @@ export class ServicesService {
       }
 
       return tx.serviceRecord.findUniqueOrThrow({
-        where: {
-          id: service.id,
-        },
-        include: {
-          maintenanceSchedule: true,
-        },
+        where: { id: service.id },
+        include: { maintenanceSchedule: true },
       });
     });
   }
@@ -514,9 +400,7 @@ export class ServicesService {
       where: {
         id,
         carId,
-        car: {
-          ownerId: userId,
-        },
+        car: { ownerId: userId },
       },
     });
 
