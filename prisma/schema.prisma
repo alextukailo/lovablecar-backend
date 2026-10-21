@@ -128,15 +128,16 @@ model TelegramConnection {
 }
 
 model Car {
-  id           String  @id @default(cuid())
-  make         String
-  model        String
-  year         Int
-  engine       String?
-  vin          String?
-  licensePlate String?
-  mileage      Int     @default(0)
-  isPrimary    Boolean @default(false)
+  id              String  @id @default(cuid())
+  make            String
+  model           String
+  year            Int
+  engine          String?
+  vin             String?
+  licensePlate    String?
+  mileage         Int     @default(0)
+  isPrimary       Boolean @default(false)
+  photoStorageKey String?
 
   engineType       EngineType?
   transmissionType TransmissionType?
