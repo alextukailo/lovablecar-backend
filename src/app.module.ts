@@ -15,6 +15,7 @@ import { MileageModule } from './mileage/mileage.module';
 
 import { PrismaThrottlerStorage } from './auth/prisma-throttler.storage';
 import { CustomNotificationsModule } from './custom-notifications/custom-notifications.module';
+import { AttachmentsModule } from './attachments/attachments.module';
 
 @Module({
   imports: [
@@ -23,6 +24,8 @@ import { CustomNotificationsModule } from './custom-notifications/custom-notific
     }),
 
     PrismaModule,
+
+    AttachmentsModule,
 
     CustomNotificationsModule,
 

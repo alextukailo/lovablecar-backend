@@ -177,8 +177,9 @@ model ServiceRecord {
   completedMaintenance MaintenanceCompletion[]
   maintenanceSchedule  MaintenanceSchedule?    @relation("ServiceSchedule")
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  serviceAttachments ServiceAttachment[]
 
   @@index([carId, date])
 }
@@ -406,6 +407,22 @@ model MileageReminder {
   @@index([nextDueAt])
 }
 
+model ServiceAttachment {
+  id String @id @default(cuid())
+
+  serviceId String
+  service   ServiceRecord @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  fileName   String
+  mimeType   String
+  size       Int
+  storageKey String @unique
+
+  createdAt           DateTime             @default(now())
+  customNotifications CustomNotification[]
+
+  @@index([serviceId])
+}
 
 enum CustomNotificationStatus {
   PENDING
@@ -418,20 +435,22 @@ model CustomNotification {
   id String @id @default(cuid())
 
   userId String
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   text String
 
   scheduledAt DateTime
-  timeZone String @default("UTC")
+  timeZone    String   @default("UTC")
+
+  attachments ServiceAttachment[]
 
   status CustomNotificationStatus @default(PENDING)
 
-  sentAt DateTime?
+  sentAt            DateTime?
   telegramMessageId Int?
 
   claimedAt DateTime?
-  attempts Int @default(0)
+  attempts  Int       @default(0)
   lastError String?
 
   createdAt DateTime @default(now())
@@ -440,4 +459,3 @@ model CustomNotification {
   @@index([userId, scheduledAt])
   @@index([status, scheduledAt])
 }
-
